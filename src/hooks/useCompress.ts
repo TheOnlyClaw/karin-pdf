@@ -1,9 +1,10 @@
 import { useCallback, useState } from "react";
-import { compressBySteppingTiers } from "../lib/tier-selector";
+import { compressWithPsRoundtrip } from "../lib/ps-roundtrip";
 
 /**
  * Hook that orchestrates the full compression pipeline.
- * Returns a `compress(file, targetBytes)` function and result state.
+ * Uses PS round-trip (PDF → PostScript → PDF) to aggressively reduce
+ * Quartz/iOS-generated PDF bloat.
  */
 export function useCompress() {
   const [compressing, setCompressing] = useState(false);
@@ -24,12 +25,16 @@ export function useCompress() {
       }, 500);
 
       try {
-        // Read file into Uint8Array
         const buffer = await file.arrayBuffer();
         const inputBytes = new Uint8Array(buffer);
 
-        // Single clean compression — step through tiers, one callMain per tier
-        const outputBytes = compressBySteppingTiers(gsModule, inputBytes, targetBytes);
+        // PS round-trip: PDF → PostScript → PDF
+        // This strips Quartz bloat far more effectively than pdfwrite tiers
+        const outputBytes = compressWithPsRoundtrip(gsModule, inputBytes);
+
+        if (!outputBytes) {
+          throw new Error("Compression failed — PS round-trip produced no output.");
+        }
 
         const blob = new Blob([outputBytes], { type: "application/pdf" });
         setResult(blob);
