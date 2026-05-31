@@ -32,10 +32,44 @@ function formatBytes(n: number): string {
 
 // ── Tier selection ──
 
-function selectTier(ratio: number): GsTier {
-  if (ratio >= 0.8) return "prepress";
-  if (ratio >= 0.5) return "printer";
-  if (ratio >= 0.2) return "ebook";
+/**
+ * Estimated compression ratios after the full PS round-trip
+ * (normalize + ps2write + pdfwrite at each tier).
+ * Empirically derived from iOS Quartz PDFs with embedded fonts.
+ * These represent the output size as a fraction of the ORIGINAL PDF.
+ */
+const TIER_ESTIMATED_RATIO: Record<GsTier, number> = {
+  prepress: 0.21,
+  printer: 0.14,
+  ebook: 0.046,
+  screen: 0.025,
+};
+
+/**
+ * Select the BEST tier for the user's target size.
+ *
+ * Instead of selecting by ratio (which ignores that the PS
+ * round-trip already compresses fonts enormously), we estimate
+ * how big each tier's output will be and pick the HIGHEST
+ * quality tier whose estimated size is still ≤ target.
+ *
+ * This way: target 8MB on 16MB → prepress (~3.4MB) ✓
+ *           target 2MB on 16MB → ebook (~740KB) — close
+ */
+function selectTier(originalBytes: number, targetBytes: number): GsTier {
+  // Target at or above ~80% of original → max quality
+  if (targetBytes >= originalBytes * 0.8) return "prepress";
+
+  const tiers: GsTier[] = ["prepress", "printer", "ebook", "screen"];
+
+  // Pick highest quality tier whose estimated output is ≤ target
+  for (const tier of tiers) {
+    const estimated = originalBytes * TIER_ESTIMATED_RATIO[tier];
+    if (estimated <= targetBytes) {
+      return tier;
+    }
+  }
+
   return "screen";
 }
 
@@ -259,7 +293,7 @@ export async function compressWithPsRoundtrip(
 ): Promise<{ bytes: Uint8Array | null; error: string | null }> {
   const originalBytes = inputBytes.byteLength;
   const ratio = targetBytes / originalBytes;
-  const tier = selectTier(ratio);
+  const tier = selectTier(originalBytes, targetBytes);
 
   // Need createInstance for multi-pass
   const factory = createInstance;
