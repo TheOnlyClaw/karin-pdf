@@ -1,156 +1,326 @@
 /**
- * Compress PDFs using a 3-pass pipeline within a single GS Module instance.
+ * Robust multi-pass PDF compression using Ghostscript WASM.
  *
- * Pass 1: pdfwrite with /screen — deduplicates fonts (needed for ps2write compatibility)
- * Pass 2: ps2write — converts to PostScript, strips Quartz font bloat
- * Pass 3: pdfwrite with target-appropriate tier — produces size close to user's target
+ * Core strategy:
+ *   Attempt 1: 3-pass PS round-trip (normalize → ps2write → final pdfwrite)
+ *   Attempt 2: 2-pass (ps2write from original → final pdfwrite)
+ *   Attempt 3: Single-pass pdfwrite with target tier
+ *   Attempt 4: Single-pass pdfwrite /screen (last resort)
  *
- * IMPORTANT: Never use -dQUIET flag — crashes WASM build.
- * Never exceed 3 callMain calls — memory corruption after that.
+ * Each attempt is fully self-contained: MEMFS is scrubbed before and after,
+ * stderr is captured for diagnostics, and every error is recorded so the
+ * user sees a meaningful message instead of a generic fail.
+ *
+ * Stability rules:
+ *   - Fonts are NEVER stripped in intermediate passes (causes ps2write corruption)
+ *   - `-dQUIET` is NEVER used (crashes WASM build)
+ *   - Every callMain is isolated with fresh MEMFS state
+ *   - The error message tells you WHICH pass failed and WHY
  */
 
 import type { GsTier } from "../types";
 import { TIER_DPI } from "./constants";
 
-/**
- * Select the tier for pass 3 based on the user's target size.
- * Same logic as the original selectTier (ratio-based).
- */
-function selectPass3Tier(originalBytes: number, targetBytes: number): GsTier {
-  const ratio = targetBytes / originalBytes;
+// ── Formatting ──
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// ── Tier selection (same ratio-based logic) ──
+
+function selectTier(ratio: number): GsTier {
   if (ratio >= 0.8) return "prepress";
   if (ratio >= 0.5) return "printer";
   if (ratio >= 0.2) return "ebook";
   return "screen";
 }
 
-/**
- * Build GS args for pass 1: PDF → PDF (font deduplication).
- * Must use /screen to produce output ps2write can handle.
- */
-function buildRecompressArgs(inputFile: string, outputFile: string): string[] {
+// ── Arg builders ──
+
+/** Pass 1: normalize PDF structure, deduplicate resources */
+function buildPass1Args(input: string, output: string): string[] {
   return [
     "-dNOPAUSE", "-dBATCH",
     "-sDEVICE=pdfwrite",
     "-dPDFSETTINGS=/screen",
-    "-dEmbedAllFonts=false", "-dSubsetFonts=false",
-    "-sOutputFile=" + outputFile,
-    inputFile,
+    "-dEmbedAllFonts=true",
+    "-dSubsetFonts=true",
+    "-dDetectDuplicateImages=true",
+    "-sOutputFile=" + output,
+    input,
   ];
 }
 
-/**
- * Build GS args for pass 2: PDF → PostScript.
- */
-function buildPs2WriteArgs(inputFile: string, outputFile: string): string[] {
+/** Pass 2: PDF → PostScript (strips Quartz font bloat) */
+function buildPass2Args(input: string, output: string): string[] {
   return [
     "-dNOPAUSE", "-dBATCH",
     "-sDEVICE=ps2write",
-    "-sOutputFile=" + outputFile,
-    inputFile,
+    "-sOutputFile=" + output,
+    input,
   ];
 }
 
-/**
- * Build GS args for pass 3: PostScript → PDF with user's tier.
- * Keeps fonts embedded for readability unless target requires aggressive compression.
- */
-function buildFinalArgs(
-  inputFile: string,
-  outputFile: string,
+/** Pass 3: PostScript → PDF at target tier */
+function buildPass3Args(input: string, output: string, tier: GsTier): string[] {
+  const dpi = TIER_DPI[tier];
+  return [
+    "-dNOPAUSE", "-dBATCH",
+    "-sDEVICE=pdfwrite",
+    `-dPDFSETTINGS=/${tier}`,
+    "-dEmbedAllFonts=true",
+    "-dSubsetFonts=true",
+    "-dDetectDuplicateImages=true",
+    "-dDownsampleColorImages=true",
+    "-dDownsampleGrayImages=true",
+    "-dDownsampleMonoImages=true",
+    `-dColorImageResolution=${dpi.color}`,
+    `-dGrayImageResolution=${dpi.gray}`,
+    `-dMonoImageResolution=${dpi.mono}`,
+    "-sOutputFile=" + output,
+    input,
+  ];
+}
+
+/** Single-pass: pdfwrite at target tier (simpler fallback) */
+function buildDirectArgs(
+  input: string,
+  output: string,
   tier: GsTier,
-  targetBytes: number,
-  originalBytes: number
+  ratio: number,
 ): string[] {
+  const dpi = TIER_DPI[tier];
   const args = [
     "-dNOPAUSE", "-dBATCH",
     "-sDEVICE=pdfwrite",
     `-dPDFSETTINGS=/${tier}`,
-  ];
-
-  // Only strip fonts for very aggressive targets (< 10% of original)
-  const ratio = targetBytes / originalBytes;
-  if (ratio < 0.1) {
-    args.push("-dEmbedAllFonts=false", "-dSubsetFonts=false");
-  }
-
-  // Use DPI from tier settings
-  const dpi = TIER_DPI[tier];
-  args.push(
+    "-dEmbedAllFonts=true",
+    "-dSubsetFonts=true",
+    "-dDetectDuplicateImages=true",
     "-dDownsampleColorImages=true",
     "-dDownsampleGrayImages=true",
+    "-dDownsampleMonoImages=true",
     `-dColorImageResolution=${dpi.color}`,
     `-dGrayImageResolution=${dpi.gray}`,
     `-dMonoImageResolution=${dpi.mono}`,
-  );
+    "-sOutputFile=" + output,
+    input,
+  ];
 
-  args.push("-sOutputFile=" + outputFile, inputFile);
+  // Only strip fonts for extremely aggressive targets (< 10 %)
+  if (ratio < 0.1) {
+    // Replace embed/subset lines
+    const embedIdx = args.indexOf("-dEmbedAllFonts=true");
+    if (embedIdx !== -1) args[embedIdx] = "-dEmbedAllFonts=false";
+    const subIdx = args.indexOf("-dSubsetFonts=true");
+    if (subIdx !== -1) args[subIdx] = "-dSubsetFonts=false";
+  }
+
   return args;
 }
 
-/**
- * Run a single GS callMain pass with clean MEMFS state.
- */
+// ── MEMFS management ──
+
+/** Nuke every file in MEMFS root. Safe to call before every pass. */
+function nukeMemfs(module: any): void {
+  try {
+    const seen = new Set<string>();
+    const entries: string[] = module.FS.readdir("/");
+    for (const e of entries) {
+      if (e === "." || e === ".." || seen.has(e)) continue;
+      seen.add(e);
+      try { module.FS.unlink("/" + e); } catch { /* dir or busy */ }
+    }
+  } catch {
+    // readdir may not exist on stripped builds — fallback to silence
+  }
+}
+
+// ── Single-pass runner with stderr capture ──
+
+interface RunResult {
+  bytes: Uint8Array | null;
+  /**
+   * Human-readable error, null on success.
+   * Contains the name of the failing pass + GS warning/error context.
+   */
+  error: string | null;
+  /** All stderr lines (including ICC warnings) for debugging */
+  warnings: string[];
+}
+
 function runPass(
   module: any,
   inputBytes: Uint8Array,
   inputName: string,
   outputName: string,
-  args: string[]
-): Uint8Array | null {
+  args: string[],
+  label: string,
+): RunResult {
+  // ── Hook stderr ──
+  const stderr: string[] = [];
+  const origPrintErr = module.printErr;
+  module.printErr = (msg: string) => {
+    stderr.push(msg);
+  };
+
   try {
-    try { module.FS.unlink(inputName); } catch {}
-    try { module.FS.unlink(outputName); } catch {}
-    module.FS.writeFile(inputName, inputBytes);
+    // ── Clean MEMFS ──
+    nukeMemfs(module);
+
+    // ── Write input ──
+    module.FS.writeFile("/" + inputName, inputBytes);
+
+    // ── Run GS ──
     module.callMain(args);
-    return module.FS.readFile(outputName, { encoding: "binary" });
-  } catch {
-    return null;
+
+    // ── Read output ──
+    const bytes = module.FS.readFile("/" + outputName, { encoding: "binary" });
+    if (!bytes || bytes.byteLength === 0) {
+      return { bytes: null, error: `${label}: output file is empty`, warnings: stderr };
+    }
+
+    // ── Check for critical errors in stderr ──
+    const critical = stderr.filter(
+      (s) =>
+        /[Ee]rror/i.test(s) &&
+        !/Invalid ICC/.test(s) &&             // Harmless
+        !/warning.*error/i.test(s) &&          // "warning: error handler..." etc
+        !/No alternate space/.test(s)          // Harmless ICC
+    );
+    if (critical.length > 0) {
+      // Non-fatal: some errors are just warnings from the PDF, not GS failure
+      // Only treat "Error: /undefined" and segfaults as real failures
+      const fatal = critical.filter(
+        (s) => /Segmentation|Fatal|undefined in /.test(s)
+      );
+      if (fatal.length > 0) {
+        return { bytes: null, error: `${label}: ${fatal[0].slice(0, 200)}`, warnings: stderr };
+      }
+    }
+
+    return { bytes, error: null, warnings: stderr };
+  } catch (err: any) {
+    const msg = err?.message || String(err);
+    // Emscripten exit errors are often just "exit(0)" — not real failures
+    if (/exit\(0\)/.test(msg)) {
+      // GS exited with code 0 but we didn't get output — try reading it again
+      try {
+        const bytes = module.FS.readFile("/" + outputName, { encoding: "binary" });
+        if (bytes && bytes.byteLength > 0) {
+          return { bytes, error: null, warnings: stderr };
+        }
+      } catch {}
+    }
+    return { bytes: null, error: `${label}: ${msg.slice(0, 300)}`, warnings: stderr };
+  } finally {
+    module.printErr = origPrintErr;
   }
 }
 
-/**
- * Cleanup MEMFS files.
- */
-function cleanup(module: any, files: string[]) {
-  for (const f of files) {
-    try { module.FS.unlink(f); } catch {}
-  }
-}
+// ── Main export ──
 
 /**
- * Compress a PDF using the 3-pass pipeline.
+ * Compress a PDF using the most aggressive method that succeeds.
  *
- * Pass 1: pdfwrite (font dedup) — always /screen
- * Pass 2: ps2write — converts to PostScript
- * Pass 3: pdfwrite with tier selected by target/original ratio
- *
- * Respects the user's target: picks a tier that produces output
- * close to their desired size while preserving quality.
+ * Returns { bytes, error } — error is null on success.
+ * Even on error, the message is descriptive enough to show the user.
  */
 export function compressWithPsRoundtrip(
   module: any,
   inputBytes: Uint8Array,
-  targetBytes: number
-): Uint8Array | null {
+  targetBytes: number,
+): { bytes: Uint8Array | null; error: string | null } {
   const originalBytes = inputBytes.byteLength;
-  const pass3Tier = selectPass3Tier(originalBytes, targetBytes);
+  const ratio = targetBytes / originalBytes;
+  const tier = selectTier(ratio);
 
-  // Pass 1: pdfwrite font dedup (always /screen for compatibility)
-  const p1Args = buildRecompressArgs("input.pdf", "pass1.pdf");
-  const p1Bytes = runPass(module, inputBytes, "input.pdf", "pass1.pdf", p1Args);
-  if (!p1Bytes) return null;
+  // Declare at function scope so they're visible for error collection
+  let p1: RunResult, p2: RunResult | undefined, p3: RunResult | undefined;
+  let a2p1: RunResult, a2p2: RunResult | undefined;
+  let a3: RunResult, a4: RunResult;
 
-  // Pass 2: ps2write
-  const p2Args = buildPs2WriteArgs("pass1.pdf", "temp.ps");
-  const psBytes = runPass(module, p1Bytes, "pass1.pdf", "temp.ps", p2Args);
-  if (!psBytes) return null;
+  // ── Attempt 1: Full 3-pass pipeline ──
+  // Pass 1: pdfwrite normalize (keeps fonts)
+  p1 = runPass(module, inputBytes, "input.pdf", "step1.pdf", buildPass1Args("input.pdf", "step1.pdf"), "Normalize");
 
-  // Pass 3: pdfwrite with target-appropriate tier
-  const p3Args = buildFinalArgs("temp.ps", "output.pdf", pass3Tier, targetBytes, originalBytes);
-  const pdfBytes = runPass(module, psBytes, "temp.ps", "output.pdf", p3Args);
-  if (!pdfBytes) return null;
+  if (p1.bytes) {
+    // Pass 2: ps2write (strips Quartz bloat)
+    p2 = runPass(module, p1.bytes, "step1.pdf", "step2.ps", buildPass2Args("step1.pdf", "step2.ps"), "PS round-trip");
 
-  cleanup(module, ["input.pdf", "pass1.pdf", "temp.ps", "output.pdf"]);
-  return pdfBytes;
+    if (p2.bytes) {
+      // Pass 3: final pdfwrite at target tier
+      p3 = runPass(module, p2.bytes, "step2.ps", "final.pdf", buildPass3Args("step2.ps", "final.pdf", tier), "Final compression");
+
+      if (p3.bytes) {
+        nukeMemfs(module);
+        return { bytes: p3.bytes, error: null };
+      }
+      // Pass 3 failed — fall through to attempt 2
+    }
+    // Pass 2 failed — fall through to attempt 2
+  }
+  // Pass 1 failed — fall through to attempt 2
+
+  // ── Attempt 2: 2-pass (ps2write from original → pdfwrite) ──
+  a2p1 = runPass(module, inputBytes, "input.pdf", "a2.ps", buildPass2Args("input.pdf", "a2.ps"), "PS convert (alt)");
+
+  if (a2p1.bytes) {
+    a2p2 = runPass(module, a2p1.bytes, "a2.ps", "final.pdf", buildPass3Args("a2.ps", "final.pdf", tier), "Final (alt)");
+
+    if (a2p2.bytes) {
+      nukeMemfs(module);
+      return { bytes: a2p2.bytes, error: null };
+    }
+  }
+
+  // ── Attempt 3: Single-pass pdfwrite ──
+  a3 = runPass(
+    module,
+    inputBytes,
+    "input.pdf",
+    "final.pdf",
+    buildDirectArgs("input.pdf", "final.pdf", tier, ratio),
+    "Single-pass",
+  );
+
+  if (a3.bytes) {
+    nukeMemfs(module);
+    return { bytes: a3.bytes, error: null };
+  }
+
+  // ── Attempt 4: Last resort — /screen single-pass ──
+  a4 = runPass(
+    module,
+    inputBytes,
+    "input.pdf",
+    "final.pdf",
+    buildDirectArgs("input.pdf", "final.pdf", "screen", ratio),
+    "Emergency",
+  );
+
+  if (a4.bytes) {
+    nukeMemfs(module);
+    return { bytes: a4.bytes, error: null };
+  }
+
+  nukeMemfs(module);
+
+  // Build a helpful error message
+  const errors: string[] = [];
+  for (const e of [p1.error, p2?.error, p3?.error, a2p1?.error, a2p2?.error, a3.error, a4.error].filter(Boolean)) {
+    if (typeof e === "string" && !errors.includes(e)) errors.push(e);
+  }
+
+  const detail = errors.length > 0
+    ? errors.slice(0, 2).join(" | ")
+    : "Unknown compression failure";
+
+  return {
+    bytes: null,
+    error: `Compression failed after trying multiple methods. ${detail}. The PDF may use an unsupported format or contain corrupted data.`,
+  };
 }

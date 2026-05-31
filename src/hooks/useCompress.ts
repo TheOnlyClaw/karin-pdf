@@ -4,9 +4,9 @@ import { compressWithPsRoundtrip } from "../lib/ps-roundtrip";
 /**
  * Hook that orchestrates the compression pipeline.
  *
- * Uses 3-pass PS round-trip (pdfwrite → ps2write → pdfwrite) within
- * a single GS Module instance. Pass 3 tier is selected based on
- * the user's target size to balance quality vs compression.
+ * Uses multi-pass PS round-trip compression with automatic
+ * fallback chains for stability. Error messages are descriptive
+ * and user-visible.
  */
 export function useCompress() {
   const [compressing, setCompressing] = useState(false);
@@ -29,20 +29,21 @@ export function useCompress() {
         const buffer = await file.arrayBuffer();
         const inputBytes = new Uint8Array(buffer);
 
-        // 3-pass PS round-trip with tier selected by target size
-        const outputBytes = compressWithPsRoundtrip(gsModule, inputBytes, targetBytes);
+        // Multi-pass compression with automatic fallback
+        const result = compressWithPsRoundtrip(gsModule, inputBytes, targetBytes);
 
-        if (!outputBytes) {
-          throw new Error("Compression failed.");
+        if (!result.bytes) {
+          // Show the specific error GS reported
+          throw new Error(result.error || "Compression did not produce output. Try a different target size or file.");
         }
 
-        const blob = new Blob([outputBytes], { type: "application/pdf" });
+        const blob = new Blob([result.bytes], { type: "application/pdf" });
         setResult(blob);
         setElapsedMs(performance.now() - start);
         return blob;
       } catch (err: any) {
         throw new Error(
-          err?.message || "Ghostscript encountered an error during compression."
+          err?.message || "An unexpected error occurred during compression."
         );
       } finally {
         clearInterval(ticker);
