@@ -1,21 +1,26 @@
 import { useCallback, useState } from "react";
 import { compressWithPsRoundtrip } from "../lib/ps-roundtrip";
+import { compressViaServer, checkServer } from "../lib/server-compress";
 
 /**
- * Hook that orchestrates the full compression pipeline.
- * Uses PS round-trip (PDF → PostScript → PDF) to aggressively reduce
- * Quartz/iOS-generated PDF bloat.
+ * Hook that orchestrates the compression pipeline.
+ *
+ * Strategy:
+ * 1. Try PS round-trip (WASM) — works for most PDFs, some fail with ENOSPC
+ * 2. If WASM fails, try server-side GS (native — works for everything)
  */
 export function useCompress() {
   const [compressing, setCompressing] = useState(false);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [result, setResult] = useState<Blob | null>(null);
+  const [usedServer, setUsedServer] = useState(false);
 
   const compress = useCallback(
     async (file: File, targetBytes: number, gsModule: any): Promise<Blob> => {
       setCompressing(true);
       setElapsedMs(0);
       setResult(null);
+      setUsedServer(false);
 
       const start = performance.now();
 
@@ -28,18 +33,35 @@ export function useCompress() {
         const buffer = await file.arrayBuffer();
         const inputBytes = new Uint8Array(buffer);
 
-        // PS round-trip: PDF → PostScript → PDF
-        // This strips Quartz bloat far more effectively than pdfwrite tiers
-        const outputBytes = compressWithPsRoundtrip(gsModule, inputBytes);
+        // ---- Attempt 1: WASM PS round-trip ----
+        const wasmResult = compressWithPsRoundtrip(gsModule, inputBytes);
 
-        if (!outputBytes) {
-          throw new Error("Compression failed — PS round-trip produced no output.");
+        if (wasmResult && wasmResult.byteLength <= targetBytes) {
+          const blob = new Blob([wasmResult], { type: "application/pdf" });
+          setResult(blob);
+          setElapsedMs(performance.now() - start);
+          return blob;
         }
 
-        const blob = new Blob([outputBytes], { type: "application/pdf" });
-        setResult(blob);
-        setElapsedMs(performance.now() - start);
-        return blob;
+        // ---- Attempt 2: Server-side (native GS) ----
+        const serverAvailable = await checkServer();
+        if (serverAvailable) {
+          const serverBlob = await compressViaServer(file);
+          setUsedServer(true);
+          setResult(serverBlob);
+          setElapsedMs(performance.now() - start);
+          return serverBlob;
+        }
+
+        // ---- Fallback: return WASM result even if over target ----
+        if (wasmResult) {
+          const blob = new Blob([wasmResult], { type: "application/pdf" });
+          setResult(blob);
+          setElapsedMs(performance.now() - start);
+          return blob;
+        }
+
+        throw new Error("Compression failed with all available methods.");
       } catch (err: any) {
         throw new Error(
           err?.message || "Ghostscript encountered an error during compression."
@@ -52,5 +74,5 @@ export function useCompress() {
     []
   );
 
-  return { compress, compressing, elapsedMs, result, setResult };
+  return { compress, compressing, elapsedMs, result, setResult, usedServer };
 }

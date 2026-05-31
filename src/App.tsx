@@ -94,7 +94,7 @@ const initialState: AppState = {
 export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const gs = useGhostscript();
-  const { compress, compressing, elapsedMs, result } = useCompress();
+  const { compress, compressing, elapsedMs, result, usedServer } = useCompress();
   const toastRef = useRef<{ msg: string; type: "error" | "warning" | "info" } | null>(null);
 
   // Sync GS status changes to reducer
@@ -275,15 +275,22 @@ export default function App() {
               <ProgressCard elapsedMs={elapsedMs} />
             )}
 
-            {/* ── Result ── */}
-            {state.phase === "complete" && state.resultBlob && (
-              <ResultCard
+        {/* ── Result ── */}
+        {state.phase === "complete" && state.resultBlob && (
+          <>
+            {usedServer && (
+              <div className="rounded-lg bg-blue-500/10 border border-blue-500/20 px-4 py-3 text-sm text-blue-400">
+                🖥️ Compressed via local server (native GS engine)
+              </div>
+            )}
+            <ResultCard
                 originalBytes={state.fileSizeBytes}
                 compressedBytes={state.resultSizeBytes}
                 elapsedMs={elapsedMs}
                 onDownload={handleDownload}
                 onCompressAgain={handleReset}
               />
+            </>
             )}
 
             {/* ── Error ── */}
