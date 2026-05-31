@@ -144,11 +144,22 @@ export default function App() {
     try {
       dispatch({ type: "COMPRESS_START" });
 
-      // Ensure GS is loaded
-      const gsModule = gs.module || (await gs.load());
+      // Ensure GS is loaded — get both cached module and factory
+      let gsModule: any;
+      let gsFactory: (() => Promise<any>) | null = null;
+
+      if (gs.module && gs.createInstance) {
+        gsModule = gs.module;
+        gsFactory = gs.createInstance;
+      } else {
+        const loaded = await gs.load();
+        gsModule = loaded.module;
+        gsFactory = loaded.createInstance;
+      }
+
       if (!gsModule) throw new Error("Compression engine not available.");
 
-      const blob = await compress(state.file, state.targetSizeBytes, gsModule);
+      const blob = await compress(state.file, state.targetSizeBytes, gsModule, gsFactory);
       dispatch({ type: "COMPRESS_COMPLETE", blob });
     } catch (err: any) {
       dispatch({

@@ -5,8 +5,8 @@ import { compressWithPsRoundtrip } from "../lib/ps-roundtrip";
  * Hook that orchestrates the compression pipeline.
  *
  * Uses multi-pass PS round-trip compression with automatic
- * fallback chains for stability. Error messages are descriptive
- * and user-visible.
+ * fallback chains. Each pass gets a FRESH WASM module instance
+ * to avoid Emscripten memory corruption from repeated callMain calls.
  */
 export function useCompress() {
   const [compressing, setCompressing] = useState(false);
@@ -14,7 +14,12 @@ export function useCompress() {
   const [result, setResult] = useState<Blob | null>(null);
 
   const compress = useCallback(
-    async (file: File, targetBytes: number, gsModule: any): Promise<Blob> => {
+    async (
+      file: File,
+      targetBytes: number,
+      gsModule: any,
+      createInstance?: () => Promise<any>,
+    ): Promise<Blob> => {
       setCompressing(true);
       setElapsedMs(0);
       setResult(null);
@@ -29,12 +34,19 @@ export function useCompress() {
         const buffer = await file.arrayBuffer();
         const inputBytes = new Uint8Array(buffer);
 
-        // Multi-pass compression with automatic fallback
-        const result = compressWithPsRoundtrip(gsModule, inputBytes, targetBytes);
+        // Multi-pass compression with fresh-module-per-pass
+        const result = await compressWithPsRoundtrip(
+          gsModule,
+          createInstance,
+          inputBytes,
+          targetBytes,
+        );
 
         if (!result.bytes) {
-          // Show the specific error GS reported
-          throw new Error(result.error || "Compression did not produce output. Try a different target size or file.");
+          throw new Error(
+            result.error ||
+              "Compression did not produce output. Try a different target size or file.",
+          );
         }
 
         const blob = new Blob([result.bytes], { type: "application/pdf" });
@@ -43,14 +55,14 @@ export function useCompress() {
         return blob;
       } catch (err: any) {
         throw new Error(
-          err?.message || "An unexpected error occurred during compression."
+          err?.message || "An unexpected error occurred during compression.",
         );
       } finally {
         clearInterval(ticker);
         setCompressing(false);
       }
     },
-    []
+    [],
   );
 
   return { compress, compressing, elapsedMs, result, setResult };
