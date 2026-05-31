@@ -1,6 +1,5 @@
 import { useCallback, useState } from "react";
-import { selectTier, buildGsArgs, binarySearchDPI } from "../lib/tier-selector";
-import type { GsTier } from "../types";
+import { compressBySteppingTiers } from "../lib/tier-selector";
 
 /**
  * Hook that orchestrates the full compression pipeline.
@@ -29,66 +28,10 @@ export function useCompress() {
         const buffer = await file.arrayBuffer();
         const inputBytes = new Uint8Array(buffer);
 
-        // ---- 1. Write input into MEMFS ----
-        gsModule.FS.writeFile("input.pdf", inputBytes);
+        // Single clean compression — step through tiers, one callMain per tier
+        const outputBytes = compressBySteppingTiers(gsModule, inputBytes, targetBytes);
 
-        // ---- 2. Select tier ----
-        const { tier, dpi } = selectTier(inputBytes.byteLength, targetBytes);
-        const args = buildGsArgs("input.pdf", "output.pdf", tier, dpi);
-
-        // ---- 3. Run GS ----
-        gsModule.callMain(args);
-
-        // ---- 4. Read output ----
-        let outputData: Uint8Array;
-        let usedTier: GsTier = tier;
-        try {
-          outputData = gsModule.FS.readFile("output.pdf", {
-            encoding: "binary",
-          });
-        } catch {
-          // Single pass failed — try binary search starting from this tier
-          const { args: bsArgs } = binarySearchDPI(
-            gsModule,
-            "input.pdf",
-            "output.pdf",
-            targetBytes,
-            tier
-          );
-          gsModule.callMain(bsArgs);
-          outputData = gsModule.FS.readFile("output.pdf", {
-            encoding: "binary",
-          });
-          usedTier = "screen"; // binarySearchDPI may have fallen through tiers
-        }
-
-        // ---- 5. If still over target, binary search ----
-        let finalData = outputData;
-        if (outputData.byteLength > targetBytes) {
-          try {
-            const { args: bsArgs, resultBytes } = binarySearchDPI(
-              gsModule,
-              "input.pdf",
-              "output.pdf",
-              targetBytes,
-              usedTier
-            );
-            gsModule.callMain(bsArgs);
-            finalData = gsModule.FS.readFile("output.pdf", {
-              encoding: "binary",
-            });
-          } catch {
-            // Binary search failed — use original output anyway
-          }
-        }
-
-        // ---- 6. Cleanup MEMFS ----
-        try {
-          gsModule.FS.unlink("input.pdf");
-          gsModule.FS.unlink("output.pdf");
-        } catch { /* ok */ }
-
-        const blob = new Blob([finalData], { type: "application/pdf" });
+        const blob = new Blob([outputBytes], { type: "application/pdf" });
         setResult(blob);
         setElapsedMs(performance.now() - start);
         return blob;

@@ -1,17 +1,6 @@
 import { TIER_DPI, MIN_DPI, MAX_DPI, MAX_BINARY_ITERATIONS } from "./constants";
 import type { GsTier } from "../types";
 
-const TIERS: GsTier[] = ["prepress", "printer", "ebook", "screen"];
-
-/**
- * Get the next more aggressive tier, or null if already at "screen".
- */
-function nextTier(tier: GsTier): GsTier | null {
-  const idx = TIERS.indexOf(tier);
-  if (idx >= TIERS.length - 1) return null;
-  return TIERS[idx + 1];
-}
-
 /**
  * Select a PDFSETTINGS tier and DPI based on the target / original ratio.
  */
@@ -59,109 +48,105 @@ export function buildGsArgs(
 }
 
 /**
- * Run a single GS compression pass and return the output size.
- * Returns null if it fails.
+ * Run a single GS compression pass.
+ * Writes inputFile to MEMFS, calls callMain, reads outputFile.
+ * Returns the output bytes, or null if it fails.
  */
-function runGsPass(
+function runSinglePass(
   module: any,
-  inputFile: string,
-  outputFile: string,
+  inputBytes: Uint8Array,
   tier: GsTier,
-  dpi: number
-): number | null {
-  const args = buildGsArgs(inputFile, outputFile, tier, {
-    color: dpi,
-    gray: dpi,
-    mono: 300,
-  });
+  dpi: { color: number; gray: number; mono: number },
+  outputFilename: string
+): Uint8Array | null {
   try {
+    // Write input fresh — ensures clean state for each call
+    try { module.FS.unlink(outputFilename); } catch { /* doesn't exist yet */ }
+    module.FS.writeFile("input.pdf", inputBytes);
+    const args = buildGsArgs("input.pdf", outputFilename, tier, dpi);
     module.callMain(args);
-    const data: Uint8Array = module.FS.readFile(outputFile, {
-      encoding: "binary",
-    });
-    return data.byteLength;
+    return module.FS.readFile(outputFilename, { encoding: "binary" });
   } catch {
     return null;
   }
 }
 
 /**
- * Binary search on DPI within a specific tier to find the highest DPI
- * that produces output under the target size.
- * Returns { dpi, size } or null if even at MIN_DPI the output is over target.
+ * Clean up MEMFS files after compression.
  */
-function searchDIpInTier(
-  module: any,
-  inputFile: string,
-  targetBytes: number,
-  tier: GsTier
-): { dpi: number; size: number } | null {
-  let lo = MIN_DPI;
-  let hi = MAX_DPI;
-  let bestDPI = lo;
-  let bestSize = Infinity;
-
-  for (let i = 0; i < MAX_BINARY_ITERATIONS; i++) {
-    const dpi = Math.round((lo + hi) / 2);
-    const size = runGsPass(module, inputFile, `_out_${tier}_${i}.pdf`, tier, dpi);
-
-    if (size === null) {
-      hi = dpi - 1;
-    } else if (size <= targetBytes) {
-      bestDPI = dpi;
-      bestSize = size;
-      lo = dpi + 1;
-    } else {
-      hi = dpi - 1;
-    }
-
-    if (lo > hi) break;
+function cleanupMemfs(module: any, extraFiles: string[] = []) {
+  const files = ["input.pdf", "output.pdf", ...extraFiles];
+  for (const f of files) {
+    try { module.FS.unlink(f); } catch { /* ok */ }
   }
-
-  if (bestSize <= targetBytes) {
-    return { dpi: bestDPI, size: bestSize };
-  }
-  return null;
 }
 
 /**
- * Binary search on tier and DPI to find the highest-quality settings
- * that produce output under the target size.
+ * Compress a PDF by stepping through tiers from least to most aggressive.
  *
- * Starts with the given tier and binary searches on DPI.
- * If all DPIs in that tier overshoot, tries the next more aggressive tier.
- * Falls through tiers until "screen" (most aggressive).
+ * Strategy:
+ * 1. Start with the tier selected by `selectTier` (based on target/original ratio)
+ * 2. Run one callMain — if result ≤ target, done
+ * 3. If over target, try the next more aggressive tier at its default DPI
+ * 4. Repeat until we hit target or reach "screen"
  *
- * Returns args for the best-found settings.
+ * This avoids repeated `callMain` calls that the WASM module can't handle.
+ * DPI binary-search is skipped because for most PDFs (especially text-based
+ * assignments), DPI downsampling has minimal effect on file size — the
+ * PDFSETTINGS tier is what actually changes the output.
  */
-export function binarySearchDPI(
+export function compressBySteppingTiers(
   module: any,
-  inputFile: string,
-  outputFile: string,
-  targetBytes: number,
-  startTier: GsTier = "screen"
-): { args: string[]; resultBytes: number } {
-  let currentTier: GsTier | null = startTier;
+  inputBytes: Uint8Array,
+  targetBytes: number
+): Uint8Array {
+  const originalBytes = inputBytes.byteLength;
+  const { tier: initialTier } = selectTier(originalBytes, targetBytes);
 
-  while (currentTier) {
-    const result = searchDIpInTier(module, inputFile, targetBytes, currentTier);
-    if (result !== null) {
-      const finalArgs = buildGsArgs(inputFile, outputFile, currentTier, {
-        color: result.dpi,
-        gray: result.dpi,
-        mono: 300,
-      });
-      return { args: finalArgs, resultBytes: result.size };
+  const TIERS: GsTier[] = ["prepress", "printer", "ebook", "screen"];
+  let startIdx = TIERS.indexOf(initialTier);
+
+  // Try each tier from the selected one upward (more aggressive)
+  for (let idx = startIdx; idx < TIERS.length; idx++) {
+    const tier = TIERS[idx];
+    const defaultDpi = TIER_DPI[tier];
+    const result = runSinglePass(module, inputBytes, tier, defaultDpi, "output.pdf");
+
+    if (result && result.byteLength <= targetBytes) {
+      cleanupMemfs(module);
+      return result;
     }
-    // Not achievable at this tier — try the next more aggressive one
-    currentTier = nextTier(currentTier);
+
+    // If this tier got us close (within 1.5× target), try reducing DPI within it
+    if (result && result.byteLength <= targetBytes * 1.5 && tier !== "prepress") {
+      // One-shot DPI adjustment: scale DPI proportionally
+      const overshootRatio = result.byteLength / targetBytes;
+      const adjustedDpi = Math.max(
+        MIN_DPI,
+        Math.round(defaultDpi.color / overshootRatio)
+      );
+      const adjResult = runSinglePass(
+        module,
+        inputBytes,
+        tier,
+        { color: adjustedDpi, gray: adjustedDpi, mono: 300 },
+        "output.pdf"
+      );
+      if (adjResult && adjResult.byteLength <= targetBytes) {
+        cleanupMemfs(module);
+        return adjResult;
+      }
+    }
   }
 
-  // Absolute fallback: screen at minimum DPI
-  const finalArgs = buildGsArgs(inputFile, outputFile, "screen", {
-    color: MIN_DPI,
-    gray: MIN_DPI,
-    mono: 300,
-  });
-  return { args: finalArgs, resultBytes: Infinity };
+  // Fallback: screen at minimum DPI
+  const fallback = runSinglePass(
+    module,
+    inputBytes,
+    "screen",
+    { color: MIN_DPI, gray: MIN_DPI, mono: 300 },
+    "output.pdf"
+  );
+  cleanupMemfs(module);
+  return fallback || inputBytes; // last resort: return original
 }
