@@ -1,44 +1,58 @@
 /**
- * Compress a PDF using the PS round-trip approach:
- *   PDF → PostScript → PDF
+ * Compress PDFs using a 3-pass pipeline within a single GS Module instance.
  *
- * This strips Quartz/iOS bloat (duplicate font subsets, verbose structure)
- * much more effectively than pdfwrite alone.
+ * Pass 1: pdfwrite on original PDF — deduplicates fonts, recompresses (single callMain)
+ * Pass 2: ps2write on pass1 result — converts to PostScript, strips Quartz bloat (2nd callMain)
+ * Pass 3: pdfwrite on PS — re-encodes with max compression (3rd callMain)
  *
- * The round-trip requires exactly 2 callMain calls, each with clean MEMFS.
- * No DPI binary search needed — the PS→PDF step uses /screen for max compression.
+ * This avoids the ENOSPC issue that occurs when pdfwrite processes PostScript
+ * derived directly from raw Quartz PDFs with 100+ embedded font subsets.
+ *
+ * IMPORTANT: NEVER use -dQUIET flag — it crashes the WASM build with
+ * "null function or function signature mismatch".
  */
 
 /**
- * Build GS args for the first pass: PDF → PostScript
+ * Build GS args for pass 1: PDF → PDF (recompress + font dedup)
  */
-function buildPsWriteArgs(inputFile: string, outputFile: string): string[] {
+function buildRecompressArgs(inputFile: string, outputFile: string): string[] {
   return [
     "-dNOPAUSE",
     "-dBATCH",
-    "-dQUIET",
-    "-sDEVICE=ps2write",
-    "-dCompressFonts=true",
-    `-sOutputFile=${outputFile}`,
+    "-sDEVICE=pdfwrite",
+    "-dPDFSETTINGS=/screen",
+    "-dEmbedAllFonts=false",
+    "-dSubsetFonts=false",
+    "-sOutputFile=" + outputFile,
     inputFile,
   ];
 }
 
 /**
- * Build GS args for the second pass: PostScript → PDF
+ * Build GS args for pass 2: PDF → PostScript
  */
-function buildPdfWriteArgs(inputFile: string, outputFile: string): string[] {
+function buildPs2WriteArgs(inputFile: string, outputFile: string): string[] {
   return [
     "-dNOPAUSE",
     "-dBATCH",
-    "-dQUIET",
+    "-sDEVICE=ps2write",
+    "-sOutputFile=" + outputFile,
+    inputFile,
+  ];
+}
+
+/**
+ * Build GS args for pass 3: PostScript → PDF (max compression)
+ */
+function buildPs2PdfArgs(inputFile: string, outputFile: string): string[] {
+  return [
+    "-dNOPAUSE",
+    "-dBATCH",
     "-sDEVICE=pdfwrite",
     "-dPDFSETTINGS=/screen",
-    "-dCompressFonts=true",
-    "-dOptimize=true",
     "-dEmbedAllFonts=false",
     "-dSubsetFonts=false",
-    `-sOutputFile=${outputFile}`,
+    "-sOutputFile=" + outputFile,
     inputFile,
   ];
 }
@@ -56,14 +70,14 @@ function runPass(
   args: string[]
 ): Uint8Array | null {
   try {
-    // Clean slate — remove any stale files
+    // Clean slate — remove stale files
     try { module.FS.unlink(inputName); } catch { /* ok */ }
     try { module.FS.unlink(outputName); } catch { /* ok */ }
 
     // Write input
     module.FS.writeFile(inputName, inputBytes);
 
-    // Run Ghostscript
+    // Run Ghostscript (no -dQUIET — crashes WASM build)
     module.callMain(args);
 
     // Read output
@@ -74,7 +88,7 @@ function runPass(
 }
 
 /**
- * Clean up MEMFS after compression.
+ * Clean up MEMFS files.
  */
 function cleanup(module: any, files: string[]) {
   for (const f of files) {
@@ -83,27 +97,34 @@ function cleanup(module: any, files: string[]) {
 }
 
 /**
- * Compress a PDF using the PS round-trip technique.
+ * Compress a PDF using the 3-pass pipeline:
  *
- * Step 1: PDF → PostScript (strips Quartz bloat, deduplicates fonts)
- * Step 2: PostScript → PDF (re-encodes efficiently with max compression)
+ *   1. pdfwrite (recompress + font dedup)
+ *   2. ps2write (PDF → PostScript — strips Quartz bloat)
+ *   3. pdfwrite (PostScript → PDF — max compression)
  *
- * Each step uses exactly 1 callMain. Total: 2 callMain calls.
+ * Works for Quartz PDFs with 100+ embedded font subsets.
+ * All within a single GS Module instance, 3 callMain calls.
  */
 export function compressWithPsRoundtrip(
   module: any,
   inputBytes: Uint8Array
 ): Uint8Array | null {
-  // Step 1: PDF → PostScript
-  const psArgs = buildPsWriteArgs("input.pdf", "temp.ps");
-  const psBytes = runPass(module, inputBytes, "input.pdf", "temp.ps", psArgs);
+  // Pass 1: pdfwrite on original — deduplicate fonts, recompress
+  const p1Args = buildRecompressArgs("input.pdf", "pass1.pdf");
+  const p1Bytes = runPass(module, inputBytes, "input.pdf", "pass1.pdf", p1Args);
+  if (!p1Bytes) return null;
+
+  // Pass 2: ps2write on pass1 result — convert to PostScript
+  const p2Args = buildPs2WriteArgs("pass1.pdf", "temp.ps");
+  const psBytes = runPass(module, p1Bytes, "pass1.pdf", "temp.ps", p2Args);
   if (!psBytes) return null;
 
-  // Step 2: PostScript → PDF
-  const pdfArgs = buildPdfWriteArgs("temp.ps", "output.pdf");
-  const pdfBytes = runPass(module, psBytes, "temp.ps", "output.pdf", pdfArgs);
+  // Pass 3: pdfwrite on PostScript — max compression
+  const p3Args = buildPs2PdfArgs("temp.ps", "output.pdf");
+  const pdfBytes = runPass(module, psBytes, "temp.ps", "output.pdf", p3Args);
   if (!pdfBytes) return null;
 
-  cleanup(module, ["input.pdf", "temp.ps", "output.pdf"]);
+  cleanup(module, ["input.pdf", "pass1.pdf", "temp.ps", "output.pdf"]);
   return pdfBytes;
 }
