@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { selectTier, buildGsArgs, binarySearchDPI } from "../lib/tier-selector";
+import type { GsTier } from "../types";
 
 /**
  * Hook that orchestrates the full compression pipeline.
@@ -40,33 +41,37 @@ export function useCompress() {
 
         // ---- 4. Read output ----
         let outputData: Uint8Array;
+        let usedTier: GsTier = tier;
         try {
           outputData = gsModule.FS.readFile("output.pdf", {
             encoding: "binary",
           });
         } catch {
-          // Single pass failed — try binary search
+          // Single pass failed — try binary search starting from this tier
           const { args: bsArgs } = binarySearchDPI(
             gsModule,
             "input.pdf",
             "output.pdf",
-            targetBytes
+            targetBytes,
+            tier
           );
           gsModule.callMain(bsArgs);
           outputData = gsModule.FS.readFile("output.pdf", {
             encoding: "binary",
           });
+          usedTier = "screen"; // binarySearchDPI may have fallen through tiers
         }
 
         // ---- 5. If still over target, binary search ----
         let finalData = outputData;
         if (outputData.byteLength > targetBytes) {
           try {
-            const { args: bsArgs } = binarySearchDPI(
+            const { args: bsArgs, resultBytes } = binarySearchDPI(
               gsModule,
               "input.pdf",
               "output.pdf",
-              targetBytes
+              targetBytes,
+              usedTier
             );
             gsModule.callMain(bsArgs);
             finalData = gsModule.FS.readFile("output.pdf", {

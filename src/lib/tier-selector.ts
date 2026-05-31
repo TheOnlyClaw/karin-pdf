@@ -1,6 +1,17 @@
 import { TIER_DPI, MIN_DPI, MAX_DPI, MAX_BINARY_ITERATIONS } from "./constants";
 import type { GsTier } from "../types";
 
+const TIERS: GsTier[] = ["prepress", "printer", "ebook", "screen"];
+
+/**
+ * Get the next more aggressive tier, or null if already at "screen".
+ */
+function nextTier(tier: GsTier): GsTier | null {
+  const idx = TIERS.indexOf(tier);
+  if (idx >= TIERS.length - 1) return null;
+  return TIERS[idx + 1];
+}
+
 /**
  * Select a PDFSETTINGS tier and DPI based on the target / original ratio.
  */
@@ -48,57 +59,109 @@ export function buildGsArgs(
 }
 
 /**
- * Binary search on DPI to find the highest DPI that undershoots the target.
- * Returns the args array for the best-found settings.
+ * Run a single GS compression pass and return the output size.
+ * Returns null if it fails.
  */
-export function binarySearchDPI(
+function runGsPass(
   module: any,
   inputFile: string,
   outputFile: string,
-  targetBytes: number
-): { args: string[]; resultBytes: number } {
+  tier: GsTier,
+  dpi: number
+): number | null {
+  const args = buildGsArgs(inputFile, outputFile, tier, {
+    color: dpi,
+    gray: dpi,
+    mono: 300,
+  });
+  try {
+    module.callMain(args);
+    const data: Uint8Array = module.FS.readFile(outputFile, {
+      encoding: "binary",
+    });
+    return data.byteLength;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Binary search on DPI within a specific tier to find the highest DPI
+ * that produces output under the target size.
+ * Returns { dpi, size } or null if even at MIN_DPI the output is over target.
+ */
+function searchDIpInTier(
+  module: any,
+  inputFile: string,
+  targetBytes: number,
+  tier: GsTier
+): { dpi: number; size: number } | null {
   let lo = MIN_DPI;
   let hi = MAX_DPI;
   let bestDPI = lo;
-  let bestBytes = Infinity;
+  let bestSize = Infinity;
 
   for (let i = 0; i < MAX_BINARY_ITERATIONS; i++) {
-    // Write input fresh each iteration (in-MEMFS)
-    // (Caller must ensure input file is present before calling this)
     const dpi = Math.round((lo + hi) / 2);
-    const args = buildGsArgs(inputFile, `_out_${i}.pdf`, "screen", {
-      color: dpi,
-      gray: dpi,
-      mono: 300,
-    });
+    const size = runGsPass(module, inputFile, `_out_${tier}_${i}.pdf`, tier, dpi);
 
-    try {
-      module.callMain(args);
-      const data: Uint8Array = module.FS.readFile(`_out_${i}.pdf`, {
-        encoding: "binary",
-      });
-      const size = data.byteLength;
-
-      if (size <= targetBytes) {
-        // Under target — this is feasible, try higher DPI
-        bestDPI = dpi;
-        bestBytes = size;
-        lo = dpi + 1;
-      } else {
-        // Over target — need lower DPI
-        hi = dpi - 1;
-      }
-    } catch {
-      hi = dpi - 1; // on error, try lower DPI
+    if (size === null) {
+      hi = dpi - 1;
+    } else if (size <= targetBytes) {
+      bestDPI = dpi;
+      bestSize = size;
+      lo = dpi + 1;
+    } else {
+      hi = dpi - 1;
     }
 
     if (lo > hi) break;
   }
 
+  if (bestSize <= targetBytes) {
+    return { dpi: bestDPI, size: bestSize };
+  }
+  return null;
+}
+
+/**
+ * Binary search on tier and DPI to find the highest-quality settings
+ * that produce output under the target size.
+ *
+ * Starts with the given tier and binary searches on DPI.
+ * If all DPIs in that tier overshoot, tries the next more aggressive tier.
+ * Falls through tiers until "screen" (most aggressive).
+ *
+ * Returns args for the best-found settings.
+ */
+export function binarySearchDPI(
+  module: any,
+  inputFile: string,
+  outputFile: string,
+  targetBytes: number,
+  startTier: GsTier = "screen"
+): { args: string[]; resultBytes: number } {
+  let currentTier: GsTier | null = startTier;
+
+  while (currentTier) {
+    const result = searchDIpInTier(module, inputFile, targetBytes, currentTier);
+    if (result !== null) {
+      const finalArgs = buildGsArgs(inputFile, outputFile, currentTier, {
+        color: result.dpi,
+        gray: result.dpi,
+        mono: 300,
+      });
+      return { args: finalArgs, resultBytes: result.size };
+    }
+    // Not achievable at this tier — try the next more aggressive one
+    currentTier = nextTier(currentTier);
+  }
+
+  // Absolute fallback: screen at minimum DPI
   const finalArgs = buildGsArgs(inputFile, outputFile, "screen", {
-    color: bestDPI,
-    gray: bestDPI,
+    color: MIN_DPI,
+    gray: MIN_DPI,
     mono: 300,
   });
-  return { args: finalArgs, resultBytes: bestBytes };
+  return { args: finalArgs, resultBytes: Infinity };
 }
