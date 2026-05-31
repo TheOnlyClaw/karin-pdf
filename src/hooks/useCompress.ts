@@ -2,10 +2,11 @@ import { useCallback, useState } from "react";
 import { compressWithPsRoundtrip } from "../lib/ps-roundtrip";
 
 /**
- * Hook that orchestrates the full compression pipeline.
+ * Hook that orchestrates the compression pipeline.
  *
- * Uses a 3-pass PS round-trip (pdfwrite → ps2write → pdfwrite) within
- * a single GS Module instance. Handles Quartz PDFs with 100+ font subsets.
+ * Uses 3-pass PS round-trip (pdfwrite → ps2write → pdfwrite) within
+ * a single GS Module instance. Pass 3 tier is selected based on
+ * the user's target size to balance quality vs compression.
  */
 export function useCompress() {
   const [compressing, setCompressing] = useState(false);
@@ -20,7 +21,6 @@ export function useCompress() {
 
       const start = performance.now();
 
-      // Tick elapsed time every 500ms
       const ticker = setInterval(() => {
         setElapsedMs(performance.now() - start);
       }, 500);
@@ -29,12 +29,11 @@ export function useCompress() {
         const buffer = await file.arrayBuffer();
         const inputBytes = new Uint8Array(buffer);
 
-        // 3-pass PS round-trip within a single GS Module instance
-        // Pass 1: pdfwrite (font dedup) → Pass 2: ps2write → Pass 3: pdfwrite
-        const outputBytes = compressWithPsRoundtrip(gsModule, inputBytes);
+        // 3-pass PS round-trip with tier selected by target size
+        const outputBytes = compressWithPsRoundtrip(gsModule, inputBytes, targetBytes);
 
         if (!outputBytes) {
-          throw new Error("Compression failed — PS round-trip produced no output.");
+          throw new Error("Compression failed.");
         }
 
         const blob = new Blob([outputBytes], { type: "application/pdf" });
