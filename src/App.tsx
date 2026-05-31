@@ -146,7 +146,7 @@ export default function App() {
 
       // Ensure GS is loaded — get both cached module and factory
       let gsModule: any;
-      let gsFactory: (() => Promise<any>) | null = null;
+      let gsFactory: (() => Promise<any>) | undefined;
 
       if (gs.module && gs.createInstance) {
         gsModule = gs.module;
