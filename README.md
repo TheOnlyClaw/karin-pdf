@@ -25,3 +25,4 @@ A privacy-first, zero-server PDF compression tool. All processing happens in the
 - **Subsequent loads**: Instant — all assets served from Cache API
 - **Compression**: A 30-page scanned textbook from ~30MB → ~3-5MB in under 30 seconds on a modern laptop
 - **Memory**: WASM heap ~100-200MB during compression, freed after
+
