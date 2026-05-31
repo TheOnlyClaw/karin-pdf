@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDF Compressor — Architecture Diagram</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: 'JetBrains Mono', monospace;
+      background: #020617;
+      min-height: 100vh;
+      padding: 2rem;
+      color: white;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .header {
+      margin-bottom: 2rem;
+    }
+    .header-row {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 0.5rem;
+    }
+    .pulse-dot {
+      width: 12px;
+      height: 12px;
+      background: #22d3ee;
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: -0.025em;
+    }
+    .subtitle {
+      color: #94a3b8;
+      font-size: 0.875rem;
+      margin-left: 1.75rem;
+    }
+    .diagram-container {
+      background: rgba(15, 23, 42, 0.5);
+      border-radius: 1rem;
+      border: 1px solid #1e293b;
+      padding: 1.5rem;
+      overflow-x: auto;
+    }
+    svg {
+      width: 100%;
+      min-width: 900px;
+      display: block;
+    }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1rem;
+      margin-top: 2rem;
+    }
+    .card {
+      background: rgba(15, 23, 42, 0.5);
+      border-radius: 0.75rem;
+      border: 1px solid #1e293b;
+      padding: 1.25rem;
+    }
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.75rem;
+    }
+    .card-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+    .card-dot.cyan { background: #22d3ee; }
+    .card-dot.emerald { background: #34d399; }
+    .card-dot.violet { background: #a78bfa; }
+    .card-dot.rose { background: #fb7185; }
+    .card h3 {
+      font-size: 0.875rem;
+      font-weight: 600;
+    }
+    .card ul {
+      list-style: none;
+      color: #94a3b8;
+      font-size: 0.75rem;
+    }
+    .card li {
+      margin-bottom: 0.375rem;
+    }
+    .footer {
+      text-align: center;
+      margin-top: 1.5rem;
+      color: #475569;
+      font-size: 0.75rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <div class="header">
+      <div class="header-row">
+        <div class="pulse-dot"></div>
+        <h1>PDF Compressor — 100% Client-Side Architecture</h1>
+      </div>
+      <p class="subtitle">Zero-server PDF compression • Ghostscript WASM • Cache-First Service Worker</p>
+    </div>
+
+    <!-- Main Diagram -->
+    <div class="diagram-container">
+      <svg viewBox="0 0 1000 700">
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#64748b" />
+          </marker>
+          <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+          </pattern>
+        </defs>
+
+        <rect width="100%" height="100%" fill="url(#grid)" />
+
+        <!-- User's Browser Boundary -->
+        <rect x="20" y="30" width="960" height="650" rx="12" fill="rgba(251, 146, 60, 0.03)" stroke="#fb923c" stroke-width="1" stroke-dasharray="8,4"/>
+        <text x="32" y="48" fill="#fb923c" font-size="10" font-weight="600">User's Browser — 100% Client-Side (Zero Server)</text>
+
+        <!-- === React App Shell === -->
+        <rect x="40" y="70" width="320" height="270" rx="8" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+        <text x="200" y="92" fill="#22d3ee" font-size="11" font-weight="600" text-anchor="middle">React SPA — App Shell</text>
+
+        <!-- Dropzone component inside shell -->
+        <rect x="55" y="105" width="140" height="50" rx="6" fill="rgba(8, 51, 68, 0.6)" stroke="#22d3ee" stroke-width="1"/>
+        <text x="125" y="125" fill="white" font-size="9" font-weight="600" text-anchor="middle">Dropzone</text>
+        <text x="125" y="140" fill="#94a3b8" font-size="8" text-anchor="middle">Drag & Drop PDF</text>
+
+        <!-- SizeSlider component -->
+        <rect x="205" y="105" width="140" height="50" rx="6" fill="rgba(8, 51, 68, 0.6)" stroke="#22d3ee" stroke-width="1"/>
+        <text x="275" y="125" fill="white" font-size="9" font-weight="600" text-anchor="middle">Size Slider</text>
+        <text x="275" y="140" fill="#94a3b8" font-size="8" text-anchor="middle">0.1 MB → File Size</text>
+
+        <!-- State management -->
+        <rect x="55" y="170" width="290" height="40" rx="6" fill="rgba(8, 51, 68, 0.5)" stroke="#22d3ee" stroke-width="1" stroke-dasharray="3,3"/>
+        <text x="200" y="188" fill="#94a3b8" font-size="9" text-anchor="middle">App State (useReducer)</text>
+        <text x="200" y="200" fill="#64748b" font-size="8" text-anchor="middle">idle → ready → compressing → complete → error</text>
+
+        <!-- Compress button -->
+        <rect x="55" y="225" width="130" height="40" rx="6" fill="rgba(8, 51, 68, 0.6)" stroke="#22d3ee" stroke-width="1"/>
+        <text x="120" y="249" fill="white" font-size="9" font-weight="600" text-anchor="middle">Compress Button</text>
+
+        <!-- Result card -->
+        <rect x="205" y="225" width="140" height="50" rx="6" fill="rgba(8, 51, 68, 0.6)" stroke="#22d3ee" stroke-width="1"/>
+        <text x="275" y="245" fill="white" font-size="9" font-weight="600" text-anchor="middle">Result Card</text>
+        <text x="275" y="260" fill="#94a3b8" font-size="8" text-anchor="middle">Download / Compress Again</text>
+
+        <text x="55" y="298" fill="#64748b" font-size="8">🔒 All processing in-browser — data never leaves</text>
+
+        <!-- === Service Worker (for Caching) === -->
+        <rect x="40" y="360" width="280" height="120" rx="8" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="180" y="382" fill="#fbbf24" font-size="11" font-weight="600" text-anchor="middle">Service Worker</text>
+        <text x="180" y="398" fill="#94a3b8" font-size="9" text-anchor="middle">Cache-First Strategy</text>
+
+        <!-- Items inside SW -->
+        <rect x="55" y="410" width="120" height="28" rx="4" fill="rgba(120, 53, 15, 0.5)" stroke="#fbbf24" stroke-width="0.8"/>
+        <text x="115" y="428" fill="white" font-size="8" text-anchor="middle">📂 App Shell Cache</text>
+
+        <rect x="185" y="410" width="120" height="28" rx="4" fill="rgba(120, 53, 15, 0.5)" stroke="#fbbf24" stroke-width="0.8"/>
+        <text x="245" y="428" fill="white" font-size="8" text-anchor="middle">⚙️ GS WASM Cache</text>
+
+        <text x="180" y="462" fill="#64748b" font-size="8" text-anchor="middle">Cache-first: one-time 5MB download → instant reloads</text>
+
+        <!-- === Ghostscript WASM === -->
+        <rect x="380" y="150" width="280" height="180" rx="8" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="520" y="175" fill="#34d399" font-size="11" font-weight="600" text-anchor="middle">Ghostscript WebAssembly Engine</text>
+
+        <rect x="395" y="190" width="115" height="55" rx="6" fill="rgba(6, 78, 59, 0.5)" stroke="#34d399" stroke-width="1"/>
+        <text x="452" y="210" fill="white" font-size="9" font-weight="600" text-anchor="middle">MEMFS</text>
+        <text x="452" y="225" fill="#94a3b8" font-size="8" text-anchor="middle">Virtual In-Memory FS</text>
+        <text x="452" y="238" fill="#64748b" font-size="7" text-anchor="middle">Input → Process → Output</text>
+
+        <rect x="530" y="190" width="115" height="55" rx="6" fill="rgba(6, 78, 59, 0.5)" stroke="#34d399" stroke-width="1"/>
+        <text x="587" y="210" fill="white" font-size="9" font-weight="600" text-anchor="middle">GS Kernel</text>
+        <text x="587" y="225" fill="#94a3b8" font-size="8" text-anchor="middle">gs.main(…args)</text>
+        <text x="587" y="238" fill="#64748b" font-size="7" text-anchor="middle">pdfwrite device</text>
+
+        <!-- Tier logic -->
+        <rect x="395" y="260" width="250" height="28" rx="4" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="0.8" stroke-dasharray="3,3"/>
+        <text x="520" y="278" fill="#94a3b8" font-size="8" text-anchor="middle">Tier Selector: prepress → printer → ebook → screen</text>
+
+        <text x="520" y="315" fill="#64748b" font-size="8" text-anchor="middle">Binary search fallback on DPI (max 7 iterations)</text>
+
+        <!-- === Cache API === -->
+        <rect x="380" y="360" width="280" height="120" rx="8" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1.5"/>
+        <text x="520" y="382" fill="#a78bfa" font-size="11" font-weight="600" text-anchor="middle">Browser Cache API</text>
+
+        <rect x="395" y="395" width="120" height="28" rx="4" fill="rgba(76, 29, 149, 0.5)" stroke="#a78bfa" stroke-width="0.8"/>
+        <text x="455" y="413" fill="white" font-size="8" text-anchor="middle">🌐 Network Fallback</text>
+
+        <rect x="525" y="395" width="120" height="28" rx="4" fill="rgba(76, 29, 149, 0.5)" stroke="#a78bfa" stroke-width="0.8"/>
+        <text x="585" y="413" fill="white" font-size="8" text-anchor="middle">💾 IndexedDB</text>
+
+        <text x="520" y="460" fill="#64748b" font-size="8" text-anchor="middle">Cold visit: fetch → cache → serve</text>
+        <text x="520" y="472" fill="#64748b" font-size="8" text-anchor="middle">Warm visit: instant from cache (0 req)</text>
+
+        <!-- === Browser APIs used === -->
+        <rect x="720" y="70" width="240" height="230" rx="8" fill="rgba(136, 19, 55, 0.2)" stroke="#fb7185" stroke-width="1.5"/>
+        <text x="840" y="92" fill="#fb7185" font-size="11" font-weight="600" text-anchor="middle">Browser Web APIs</text>
+
+        <rect x="735" y="105" width="210" height="30" rx="4" fill="rgba(136, 19, 55, 0.3)" stroke="#fb7185" stroke-width="0.8"/>
+        <text x="840" y="124" fill="white" font-size="9" text-anchor="middle">WebAssembly.instantiateStreaming</text>
+
+        <rect x="735" y="143" width="210" height="30" rx="4" fill="rgba(136, 19, 55, 0.3)" stroke="#fb7185" stroke-width="0.8"/>
+        <text x="840" y="162" fill="white" font-size="9" text-anchor="middle">Cache API / Service Worker</text>
+
+        <rect x="735" y="181" width="210" height="30" rx="4" fill="rgba(136, 19, 55, 0.3)" stroke="#fb7185" stroke-width="0.8"/>
+        <text x="840" y="200" fill="white" font-size="9" text-anchor="middle">HTML5 File API</text>
+
+        <rect x="735" y="219" width="210" height="30" rx="4" fill="rgba(136, 19, 55, 0.3)" stroke="#fb7185" stroke-width="0.8"/>
+        <text x="840" y="238" fill="white" font-size="9" text-anchor="middle">URL.createObjectURL</text>
+
+        <rect x="735" y="257" width="210" height="30" rx="4" fill="rgba(136, 19, 55, 0.3)" stroke="#fb7185" stroke-width="0.8"/>
+        <text x="840" y="276" fill="white" font-size="9" text-anchor="middle">Blob / Download (HTMLAnchorElement)</text>
+
+        <!-- ====== DATA FLOW ARROWS ====== -->
+
+        <!-- User → Dropzone -->
+        <path d="M 125 305 L 125 320 L 80 320 L 80 342" fill="none" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <text x="82" y="335" fill="#94a3b8" font-size="7" text-anchor="start">File Blob</text>
+
+        <!-- Dropzone → State -->
+        <line x1="195" y1="130" x2="203" y2="130" stroke="#22d3ee" stroke-width="1" marker-end="url(#arrowhead)"/>
+
+        <!-- Slider → State -->
+        <line x1="275" y1="155" x2="275" y2="168" stroke="#22d3ee" stroke-width="1" marker-end="url(#arrowhead)"/>
+
+        <!-- Compress button → GS WASM -->
+        <path d="M 120 265 L 120 300 Q 120 320 140 320 L 452 320 L 452 345" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <text x="280" y="314" fill="#94a3b8" font-size="7" text-anchor="middle">File bytes + args</text>
+
+        <!-- GS WASM → Result Card (output) -->
+        <path d="M 587 345 L 587 355 Q 587 370 570 370 L 275 370 L 275 300" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <text x="430" y="365" fill="#94a3b8" font-size="7" text-anchor="middle">Compressed Blob</text>
+
+        <!-- Result → Download -->
+        <path d="M 275 275 L 275 285 Q 275 290 280 290 L 840 290 L 840 298" fill="none" stroke="#22d3ee" stroke-width="1.5" stroke-dasharray="3,3" marker-end="url(#arrowhead)"/>
+        <text x="500" y="288" fill="#64748b" font-size="7">download()</text>
+
+        <!-- App Shell → SW → Cache (cold visit) -->
+        <path d="M 200 340 L 200 355 Q 200 358 180 358 L 180 362" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arrowhead)"/>
+        <text x="140" y="355" fill="#64748b" font-size="7">Cold: fetch WASM</text>
+
+        <!-- SW → Cache API (store) -->
+        <line x1="320" y1="395" x2="378" y2="395" stroke="#fbbf24" stroke-width="1" marker-end="url(#arrowhead)"/>
+        <text x="349" y="392" fill="#64748b" font-size="7">store</text>
+
+        <!-- Cache → SW (serve) -->
+        <path d="M 380 430 L 360 430 Q 350 430 350 440 L 320 440" fill="none" stroke="#fbbf24" stroke-width="1" marker-end="url(#arrowhead)"/>
+        <text x="360" y="464" fill="#64748b" font-size="7">serve (warm)</text>
+
+        <!-- SW → GS WASM -->
+        <path d="M 320 380 L 350 380 Q 370 380 370 360 L 380 240" fill="none" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <text x="355" y="310" fill="#94a3b8" font-size="7">instantiate()</text>
+
+        <!-- Legend -->
+        <text x="720" y="330" fill="white" font-size="10" font-weight="600">Legend</text>
+
+        <rect x="720" y="342" width="16" height="10" rx="2" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1"/>
+        <text x="742" y="350" fill="#94a3b8" font-size="8">React UI</text>
+
+        <rect x="720" y="358" width="16" height="10" rx="2" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1"/>
+        <text x="742" y="366" fill="#94a3b8" font-size="8">GS WASM Engine</text>
+
+        <rect x="720" y="374" width="16" height="10" rx="2" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1"/>
+        <text x="742" y="382" fill="#94a3b8" font-size="8">Service Worker</text>
+
+        <rect x="720" y="390" width="16" height="10" rx="2" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1"/>
+        <text x="742" y="398" fill="#94a3b8" font-size="8">Cache API</text>
+
+        <rect x="720" y="406" width="16" height="10" rx="2" fill="rgba(136, 19, 55, 0.3)" stroke="#fb7185" stroke-width="1"/>
+        <text x="742" y="414" fill="#94a3b8" font-size="8">Browser API</text>
+
+        <!-- Data Flow annotation -->
+        <text x="720" y="444" fill="#64748b" font-size="8">Data Flow:</text>
+        <line x1="720" y1="452" x2="740" y2="452" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <text x="742" y="456" fill="#64748b" font-size="8">File/Data</text>
+        <line x1="720" y1="466" x2="740" y2="466" stroke="#fb7185" stroke-width="1" stroke-dasharray="3,3"/>
+        <text x="742" y="470" fill="#64748b" font-size="8">Cache flow</text>
+
+        <!-- Download arrow annotation -->
+        <line x1="720" y1="480" x2="740" y2="480" stroke="#22d3ee" stroke-width="1" stroke-dasharray="3,3"/>
+        <text x="742" y="484" fill="#64748b" font-size="8">Download trigger</text>
+
+      </svg>
+    </div>
+
+    <!-- Info Cards -->
+    <div class="cards">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot cyan"></div>
+          <h3>🗂 App Shell (React SPA)</h3>
+        </div>
+        <ul>
+          <li>• 6 pure presentational components (Dropzone, Slider, Button…)</li>
+          <li>• Centralized useReducer for all state transitions</li>
+          <li>• Custom hooks: useGhostscript, useCompress, useElapsedTime</li>
+          <li>• Dark/Light theme via prefers-color-scheme CSS vars</li>
+          <li>• Build: Vite + Tailwind CSS v4, ~60KB gzipped</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot emerald"></div>
+          <h3>🛠 Ghostscript WASM Engine</h3>
+        </div>
+        <ul>
+          <li>• ~5MB gzipped — cached after first visit</li>
+          <li>• MEMFS virtual filesystem (no disk I/O)</li>
+          <li>• Tier selection (prepress→printer→ebook→screen)</li>
+          <li>• Binary search on DPI (36–300) as fallback</li>
+          <li>• Single-threaded, blocking run (indeterminate progress shown)</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot amber"></div>
+          <h3>⚡ Caching Strategy</h3>
+        </div>
+        <ul>
+          <li>• Service Worker intercepts /ghostscript.wasm</li>
+          <li>• Cache-First: zero network on warm visits</li>
+          <li>• Content-addressed WASM file (hash in filename)</li>
+          <li>• Cold visit: ~5.1MB total (WASM + app shell)</li>
+          <li>• Warm visit: instant — 0KB network, <100ms init</li>
+        </ul>
+      </div>
+    </div>
+
+    <p class="footer">
+      PDF Compressor • 100% Browser-Side • Zero Server • Privacy-First
+    </p>
+  </div>
+</body>
+</html>

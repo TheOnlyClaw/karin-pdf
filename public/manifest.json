@@ -1,0 +1,16 @@
+{
+  "name": "PDF Compressor",
+  "short_name": "PDF Compressor",
+  "description": "Compress PDFs entirely in your browser. 100% private.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

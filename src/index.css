@@ -1,0 +1,72 @@
+@import "tailwindcss";
+
+/* ── CSS Custom Properties for theming ── */
+:root {
+  --bg: #ffffff;
+  --bg-card: #f8fafc;
+  --bg-dropzone: #f1f5f9;
+  --border: #e2e8f0;
+  --primary: #0f172a;
+  --muted: #64748b;
+  --accent: #6366f1;
+  --success: #22c55e;
+  --error: #ef4444;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f172a;
+    --bg-card: #1e293b;
+    --bg-dropzone: #334155;
+    --border: #475569;
+    --primary: #f1f5f9;
+    --muted: #94a3b8;
+    --accent: #818cf8;
+    --success: #4ade80;
+    --error: #f87171;
+  }
+}
+
+/* ── Theme utility classes ── */
+@utility bg-bg { background-color: var(--bg); }
+@utility bg-bg-card { background-color: var(--bg-card); }
+@utility bg-bg-dropzone { background-color: var(--bg-dropzone); }
+@utility border-border { border-color: var(--border); }
+@utility text-primary { color: var(--primary); }
+@utility text-muted { color: var(--muted); }
+@utility text-accent { color: var(--accent); }
+@utility text-success { color: var(--success); }
+@utility bg-accent { background-color: var(--accent); }
+@utility bg-accent/5 { background-color: color-mix(in srgb, var(--accent) 5%, transparent); }
+@utility bg-accent/10 { background-color: color-mix(in srgb, var(--accent) 10%, transparent); }
+@utility bg-accent/15 { background-color: color-mix(in srgb, var(--accent) 15%, transparent); }
+@utility border-accent { border-color: var(--accent); }
+@utility shadow-accent/25 { box-shadow: 0 4px 14px 0 color-mix(in srgb, var(--accent) 25%, transparent); }
+@utility shadow-accent/30 { box-shadow: 0 4px 14px 0 color-mix(in srgb, var(--accent) 30%, transparent); }
+
+/* ── Base styles ── */
+html {
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+}
+
+/* ── Animations ── */
+@keyframes slide-in-from-right-2 {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@utility animate-in {
+  animation: slide-in-from-right-2 0.3s ease-out;
+}
